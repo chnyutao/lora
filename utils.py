@@ -4,10 +4,11 @@ from pathlib import Path
 import torch
 from datasets import Dataset, load_dataset
 from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     T5ForConditionalGeneration,
-    T5Tokenizer,
 )
 
 from config import Config
@@ -45,9 +46,17 @@ def make_model(
     config: Config, device: str | torch.device
 ) -> tuple[PreTrainedTokenizerBase, PreTrainedModel]:
     name = config.model.name
-    if name.startswith('google-t5/'):
-        tokenizer = T5Tokenizer.from_pretrained(name)
+    if name.lower().startswith('google-t5/'):
+        tokenizer = AutoTokenizer.from_pretrained(name)
         model = T5ForConditionalGeneration.from_pretrained(name)
+    elif name.lower().startswith('qwen/'):
+        tokenizer = AutoTokenizer.from_pretrained(name)
+        tokenizer.padding_side = 'left'
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(name)
+        if model.config.pad_token_id is None:
+            model.config.pad_token_id = tokenizer.pad_token_id
     else:
         raise NotImplementedError
     torch.nn.Module.to(model, device)
