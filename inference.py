@@ -18,7 +18,8 @@ model.lm_head.register_forward_pre_hook(
 )
 
 # loop over batches
-n_batches = config.dataset.n_samples // config.dataset.batch_size
+n_samples, batch_size = config.dataset.n_samples, config.dataset.batch_size
+n_batches = (n_samples // batch_size) if n_samples > 0 else len(dataset)
 for batch in tqdm(dataset.take(n_batches), desc='Inference'):
     assert isinstance(batch, dict)
     x = tokenizer(batch['x'], padding=True, return_tensors='pt')

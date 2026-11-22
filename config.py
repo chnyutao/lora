@@ -15,7 +15,7 @@ class DatasetConfig:
     batch_size: int = 64
     """Batch size."""
 
-    n_samples: int = 2048
+    n_samples: int = -1
     """Number of samples."""
 
 
