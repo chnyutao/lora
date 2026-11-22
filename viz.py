@@ -1,14 +1,4 @@
-"""Plot singular values and cumulative spectral energy from per-seed .pt files.
-
-Each run of inference.py writes asset/sv/<model>-<dataset>/<seed>.pt holding
-the descending singular values of H. This script globs those files via
-utils.get_sv_path, aggregates the seeds, and plots the mean spectrum with
-error bars plus the cumulative spectral energy (y-axis zoomed to 90%-100%).
-"""
-
 from __future__ import annotations
-
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,105 +8,52 @@ import tyro
 from config import Config
 from utils import Assets
 
+# configuration
+config = tyro.cli(Config)
+styles = {
+    'cola': ((0, (2, 1)), 'o'),
+    'qnli': ((0, (4, 1)), 's'),
+    'sst2': (':', '^'),
+}
 
-def read_values(sv_dir: Path) -> torch.Tensor:
-    """Stack per-seed singular value arrays into a seeds x values tensor."""
-    try:
-        paths = sorted(sv_dir.glob('*.pt'), key=lambda path: int(path.stem))
-    except ValueError as error:
-        raise ValueError(f'expected numeric per-seed filenames in {sv_dir}') from error
-    if not paths:
-        raise ValueError(f'no singular value files found in {sv_dir}')
-    arrays = [torch.load(path, weights_only=True) for path in paths]
-    length = arrays[0].shape[0]
-    if any(array.ndim != 1 or array.shape[0] != length for array in arrays):
-        raise ValueError('all singular value files must hold equal-length vectors')
-    matrix = torch.stack(arrays)
-    if not torch.isfinite(matrix).all() or (matrix < 0).any():
-        raise ValueError('singular values must be finite and nonnegative')
-    return matrix
+# initialize figure
+ax = plt.figure(figsize=(4, 3)).gca()
+xticks = np.array([0, 2, 100, 200, 400, 800])
+ax.set_xlim(0**0.5, 800**0.5)
+ax.set_xticks(xticks**0.5, labels=xticks)
+ax.set_ylim(0.98 - 1e-3, 1.00 + 1e-3)
+ax.set_yticks([0.98, 0.985, 0.99, 0.995, 1])
+ax.set_yticklabels(['98', '', '99', '', '100'])
+for threshold, n in zip((0.99, 0.999), (2, 100)):
+    kwds = {'linestyle': ':', 'color': 'tab:gray'}
+    ax.axhline(threshold, c='gray', ls=':')
+    ax.vlines(n**0.5, ymin=0, ymax=threshold, color='gray', ls=':')
+ax.set_xlabel('# Leading Singular Values')
+ax.set_ylabel('Cumulative Energy Ratio (%)')
 
-
-def plot_values(values: torch.Tensor, output: Path) -> None:
-    """Plot the mean spectrum (error bars) and cumulative energy across seeds."""
-    if values.ndim != 2:
-        raise ValueError('expected a seeds x values matrix')
-    means = values.mean(dim=0).numpy()
-    stds = values.std(dim=0).numpy()
-    indices = np.arange(1, len(means) + 1)
-
-    # per-seed cumulative spectral energy, averaged across seeds
-    energy = values**2
-    cum_energy = (
-        (energy.cumsum(dim=1) / energy.sum(dim=1, keepdim=True)).mean(dim=0).numpy()
+# visualize energy distribution of dataset
+for dataset, (linestyle, marker) in styles.items():
+    # read singular values
+    config.dataset.name = dataset
+    paths = Assets.sv(config).glob('*.pt')
+    arrays = torch.stack([torch.load(path) for path in paths])
+    assert torch.isfinite(arrays).all() and (arrays > 0).all()
+    # compute spectral energy
+    energy = arrays**2
+    energy = energy.cumsum(dim=1) / energy.sum(dim=1, keepdim=True)
+    energy = energy.mean(dim=0)
+    # plot cumulative energy ratio
+    x = np.arange(len(energy)) + 1
+    ax.plot(
+        *(x**0.5, energy),
+        label=dataset,
+        linestyle=linestyle,
+        linewidth=1.5,
+        marker=marker,
+        markerfacecolor='white',
+        markersize=4,
+        markevery=np.concat([np.arange(2), np.arange(20, len(x), 50)]),
     )
-
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8))
-
-    axes[0].errorbar(
-        indices,
-        means,
-        yerr=stds,
-        marker='o',
-        markersize=3,
-        linewidth=1,
-        capsize=2,
-        label='mean singular value',
-    )
-    axes[0].set_yscale('log')
-    axes[0].set_title('Singular values of H across seeds (descending)')
-    axes[0].set_xlabel('singular value index')
-    axes[0].set_ylabel('mean singular value (log scale)')
-    axes[0].grid(alpha=0.3, which='both')
-    axes[0].legend()
-
-    axes[1].plot(
-        indices,
-        cum_energy,
-        marker='o',
-        markersize=3,
-        linewidth=1,
-        label='cumulative energy',
-    )
-    for threshold in (0.95, 0.99):
-        k = np.searchsorted(cum_energy, threshold) + 1
-        axes[1].axhline(
-            threshold,
-            color='orange' if threshold == 0.99 else 'green',
-            linestyle='--',
-            alpha=0.7,
-            label=f'{int(threshold * 100)}% energy',
-        )
-        axes[1].axvline(
-            k,
-            color='red',
-            linestyle=':',
-            alpha=0.7,
-            label=f'{int(threshold * 100)}% at k={k}',
-        )
-    axes[1].set_title(
-        'Cumulative spectral energy fraction vs number of singular values'
-    )
-    axes[1].set_xlabel('number of top singular values kept')
-    axes[1].set_ylabel('cumulative energy fraction')
-    axes[1].set_ylim(0.9, 1.005)
-    axes[1].grid(alpha=0.3)
-    axes[1].legend()
-
-    fig.tight_layout()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=150)
-    plt.close(fig)
-    print(f'Saved SVD visualization to {output}')
-
-
-def main() -> None:
-    config = tyro.cli(Config)
-    sv_dir = Assets.sv(config)
-    values = read_values(sv_dir)
-    print(f'Loaded {values.shape[0]} seed(s) with {values.shape[1]} singular values')
-    plot_values(values, sv_dir.with_suffix('.png'))
-
-
-if __name__ == '__main__':
-    main()
+ax.legend(loc='lower right')
+plt.gcf().tight_layout()
+plt.savefig('asset/out.pdf', bbox_inches='tight')
