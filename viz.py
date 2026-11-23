@@ -11,28 +11,39 @@ from utils import Assets
 # configuration
 config = tyro.cli(Config)
 styles = {
-    'cola': ((0, (2, 1)), 'o'),
-    'qnli': ((0, (4, 1)), 's'),
-    'sst2': (':', '^'),
+    'cola': {'ls': (0, (4, 1)), 'marker': 'o', 'ms': 3},
+    'qnli': {'ls': (0, (2, 1)), 'marker': 's', 'ms': 2.5},
+    'sst2': {'ls': (0, (1, 1)), 'marker': '^', 'ms': 3},
 }
 
 # initialize figure
 ax = plt.figure(figsize=(4, 3)).gca()
-xticks = np.array([0, 2, 100, 200, 400, 800])
-ax.set_xlim(0**0.5, 800**0.5)
+model = config.model.name.lower()
+if model.startswith('google-t5/'):
+    xticks = np.array([0, 2, 100, 200, 400, 800])
+    yticks = np.array([98, 98.5, 99, 99.5, 100])
+    thresholds = [(2, 100), (99, 99.9)]
+elif model.startswith('qwen/'):
+    xticks = np.array([0, 5, 200, 400, 800, 1600])
+    yticks = np.array([80, 85, 90, 95, 100])
+    thresholds = [(5, 200), (90, 97.5)]
+else:
+    raise NotImplementedError
+ax.set_xlim(xticks[0] ** 0.5, xticks[-1] ** 0.5)
 ax.set_xticks(xticks**0.5, labels=xticks)
-ax.set_ylim(0.98 - 1e-3, 1.00 + 1e-3)
-ax.set_yticks([0.98, 0.985, 0.99, 0.995, 1])
-ax.set_yticklabels(['98', '', '99', '', '100'])
-for threshold, n in zip((0.99, 0.999), (2, 100)):
-    kwds = {'linestyle': ':', 'color': 'tab:gray'}
-    ax.axhline(threshold, c='gray', ls=':')
-    ax.vlines(n**0.5, ymin=0, ymax=threshold, color='gray', ls=':')
+pad = (yticks[-1] - yticks[0]) / 20
+ax.set_ylim(yticks[0] - pad, yticks[-1] + pad)
+ax.set_yticks(yticks)
+ax.set_yticklabels(['' if i % 2 else f'{y:.0f}' for i, y in enumerate(yticks)])
+for x, y in zip(*thresholds):
+    kwds = {'alpha': 0.5, 'color': 'gray', 'ls': ':', 'lw': 1}
+    ax.vlines(x**0.5, ymin=0, ymax=y, **kwds)
+    ax.axhline(y, **kwds)
 ax.set_xlabel('# Leading Singular Values')
 ax.set_ylabel('Cumulative Energy Ratio (%)')
 
-# visualize energy distribution of dataset
-for dataset, (linestyle, marker) in styles.items():
+# visualize dataset spetral energy
+for dataset, kwds in styles.items():
     # read singular values
     config.dataset.name = dataset
     paths = Assets.sv(config).glob('*.pt')
@@ -41,19 +52,12 @@ for dataset, (linestyle, marker) in styles.items():
     # compute spectral energy
     energy = arrays**2
     energy = energy.cumsum(dim=1) / energy.sum(dim=1, keepdim=True)
-    energy = energy.mean(dim=0)
+    energy = energy.mean(dim=0) * 100
     # plot cumulative energy ratio
     x = np.arange(len(energy)) + 1
-    ax.plot(
-        *(x**0.5, energy),
-        label=dataset,
-        linestyle=linestyle,
-        linewidth=1.5,
-        marker=marker,
-        markerfacecolor='white',
-        markersize=4,
-        markevery=np.concat([np.arange(2), np.arange(20, len(x), 50)]),
-    )
+    indices = np.concat([np.arange(2), np.arange(20, len(x), 50)])
+    kwds.update({'markevery': indices, 'mfc': 'w', 'lw': 1.5})
+    ax.plot(x**0.5, energy, label=dataset, **kwds)
 ax.legend(loc='lower right')
 plt.gcf().tight_layout()
 plt.savefig('asset/out.pdf', bbox_inches='tight')
